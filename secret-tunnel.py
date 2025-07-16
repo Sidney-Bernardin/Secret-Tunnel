@@ -12,5 +12,8 @@ for path in sys.argv[1:]:
             "kvpairs" : json.dumps(content["configmap"]["data"] | content["secret"]["data"]),
         })
 
-out = yaml.dump({"secrets": secrets}, width=math.inf)
+out = yaml.dump({"secrets": secrets},
+    width=math.inf,
+    sort_keys=False)
+
 print(out)
