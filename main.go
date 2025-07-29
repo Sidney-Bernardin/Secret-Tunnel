@@ -6,81 +6,97 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 
 	"github.com/goccy/go-yaml"
 )
 
-type Target struct {
-	FullnameOverride string `json:"fullnameOverride"`
-	Configmap        struct {
-		Data struct {
-			StadiumDeviceEndpoint  string `json:"STADIUM_DEVICE_ENDPOINT,omitempty"`
-			StadiumDeviceApiToken  string `json:"STADIUM_DEVICE_API_TOKEN,omitempty"`
-			StadiumDeviceUsername  string `json:"STADIUM_DEVICE_USERNAME,omitempty"`
-			StadiumDevicePassword  string `json:"STADIUM_DEVICE_PASSWORD,omitempty"`
-			StadiumDeviceApiKey    string `json:"STADIUM_DEVICE_API_KEY,omitempty"`
-			StadiumDeviceAccountId string `json:"STADIUM_DEVICE_ACCOUNT_ID,omitempty"`
-			StadiumDeviceId        string `json:"STADIUM_DEVICE_ID,omitempty"`
-			StadiumDeviceType      string `json:"STADIUM_DEVICE_TYPE,omitempty"`
-		} `json:"data"`
-	} `json:"configmap"`
-}
+var (
+	singleQuote = flag.Bool("single-quote", false, "Single or double quotes for strings.")
 
-type Secret struct {
+	dataKeys = []string{
+		"STADIUM_DEVICE_ENDPOINT",
+		"STADIUM_DEVICE_API_TOKEN",
+		"STADIUM_DEVICE_USERNAME",
+		"STADIUM_DEVICE_PASSWORD",
+		"STADIUM_DEVICE_API_KEY",
+		"STADIUM_DEVICE_ACCOUNT_ID",
+		"STADIUM_DEVICE_ID",
+		"STADIUM_DEVICE_TYPE",
+	}
+)
+
+type secret struct {
 	Name    string `json:"name"`
 	KVPairs string `json:"kvpairs"`
 }
-
-var (
-	singleQuote = flag.Bool("single-quote", false, "Single or double quotes for strings.")
-)
 
 func main() {
 	flag.Parse()
 
 	var output struct {
-		Secrets []Secret `json:"secrets"`
+		Secrets []secret `json:"secrets"`
 	}
 
 	for _, path := range flag.Args() {
 		log := slog.With("file", path)
 
-		// Open path's file.
 		file, err := os.Open(path)
 		if err != nil {
 			log.Error("Cannot open file", "err", err.Error())
 			return
 		}
 
-		// Read the file.
 		targetYAML, err := io.ReadAll(file)
 		if err != nil {
 			log.Error("Cannot read file", "err", err.Error())
 			return
 		}
 
-		// YAML decode the target.
-		var target Target
+		var target map[string]any
 		if err := yaml.Unmarshal(targetYAML, &target); err != nil {
 			log.Error("Cannot YAML decode file", "err", err.Error())
 			return
 		}
 
-		// JSON encode the target's configmap data.
-		targetConfigmapDataJSON, err := json.Marshal(target.Configmap.Data)
+		fullnameOverride, ok := target["fullnameOverride"].(string)
+		if !ok {
+			continue
+		}
+
+		kvpairs := map[string]any{}
+
+		for k, v := range target {
+			if k != "configmap" && k != "secret" {
+				continue
+			}
+
+			var data map[string]any
+			if m, _ := v.(map[string]any); m != nil {
+				if data, _ = m["data"].(map[string]any); data == nil {
+					continue
+				}
+			}
+
+			for dataKey, dataVal := range data {
+				if slices.Contains(dataKeys, dataKey) {
+					kvpairs[dataKey] = dataVal
+				}
+			}
+		}
+
+		kvpairsJSON, err := json.Marshal(kvpairs)
 		if err != nil {
-			log.Error("Cannot JSON encode configmap data", "err", err.Error())
+			log.Error("Cannot JSON encode kvpairs", "err", err.Error())
 			return
 		}
 
-		// Add a new secret to the output.
-		output.Secrets = append(output.Secrets, Secret{
-			Name:    target.FullnameOverride,
-			KVPairs: string(targetConfigmapDataJSON),
+		output.Secrets = append(output.Secrets, secret{
+			Name:    fullnameOverride,
+			KVPairs: string(kvpairsJSON),
 		})
 	}
 
-	// YAML encode the output to stdout.
 	if err := yaml.NewEncoder(os.Stdout, yaml.UseSingleQuote(*singleQuote)).Encode(output); err != nil {
 		slog.Error("Cannot YAML encode output", "err", err.Error())
 	}
