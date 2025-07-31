@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"slices"
 
 	"github.com/goccy/go-yaml"
+	"github.com/jackc/pgx/v5"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -33,6 +36,12 @@ type secret struct {
 
 func main() {
 	flag.Parse()
+
+	enabledSensors, err := getEnabledSensors(context.Background())
+	if err != nil {
+		slog.Error("Cannot get enabled sensors", "err", err.Error())
+		return
+	}
 
 	var output struct {
 		Secrets []secret `json:"secrets"`
@@ -64,6 +73,7 @@ func main() {
 			continue
 		}
 
+		var sensorUUID string
 		kvpairs := map[string]any{}
 
 		for k, v := range target {
@@ -78,11 +88,21 @@ func main() {
 				}
 			}
 
+			if uuid, ok := data["STADIUM_DEVICE_SENSOR_UUID"].(string); ok {
+				if slices.Contains(enabledSensors, uuid) {
+					sensorUUID = uuid
+				}
+			}
+
 			for dataKey, dataVal := range data {
 				if slices.Contains(dataKeys, dataKey) {
 					kvpairs[dataKey] = dataVal
 				}
 			}
+		}
+
+		if sensorUUID == "" {
+			continue
 		}
 
 		kvpairsJSON, err := json.Marshal(kvpairs)
@@ -100,4 +120,39 @@ func main() {
 	if err := yaml.NewEncoder(os.Stdout, yaml.UseSingleQuote(*singleQuote)).Encode(output); err != nil {
 		slog.Error("Cannot YAML encode output", "err", err.Error())
 	}
+}
+
+func getEnabledSensors(ctx context.Context) ([]string, error) {
+
+	conn, err := pgx.Connect(ctx, os.Getenv("SECRET_TUNNEL_POSTGRES_URL"))
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create postgres connection")
+	}
+
+	sensors, err := conn.Query(ctx, `
+		SELECT sensor_uuid
+		FROM sensors
+		WHERE enabled_flag = true
+	`)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot select enabled sensors")
+	}
+
+	defer sensors.Close()
+
+	sensorUUIDs := []string{}
+	for sensors.Next() {
+		var sensor string
+		if err := sensors.Scan(&sensor); err != nil {
+			return nil, errors.Wrap(err, "cannot scan sensor")
+		}
+		sensorUUIDs = append(sensorUUIDs, sensor)
+	}
+
+	if sensors.Err() != nil {
+		return nil, errors.Wrap(err, "cannot scan sensors")
+	}
+
+	return sensorUUIDs, nil
 }
