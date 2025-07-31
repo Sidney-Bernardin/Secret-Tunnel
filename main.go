@@ -131,7 +131,7 @@ func getEnabledSensors(ctx context.Context) ([]string, error) {
 
 	sensors, err := conn.Query(ctx, `
 		SELECT sensor_uuid
-		FROM sensors
+		FROM collections.sensors
 		WHERE enabled_flag = true
 	`)
 
