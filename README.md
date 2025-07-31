@@ -2,6 +2,10 @@
 
 ## Example
 ```bash
+# Build
+go build -o secret-tunnel main.go
+
+# Run
 find ./src -name "*.yaml" | xargs ./secret-tunnel > out.yaml
 ```
 
