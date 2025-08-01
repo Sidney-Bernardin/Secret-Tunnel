@@ -15,121 +15,133 @@ import (
 )
 
 var (
+	postgresURL = os.Getenv("SECRET_TUNNEL_POSTGRES_URL")
 	singleQuote = flag.Bool("single-quote", false, "Single or double quotes for strings.")
+)
 
-	dataKeys = []string{
-		"STADIUM_DEVICE_ENDPOINT",
-		"STADIUM_DEVICE_API_TOKEN",
-		"STADIUM_DEVICE_USERNAME",
-		"STADIUM_DEVICE_PASSWORD",
-		"STADIUM_DEVICE_API_KEY",
-		"STADIUM_DEVICE_ACCOUNT_ID",
-		"STADIUM_DEVICE_ID",
-		"STADIUM_DEVICE_TYPE",
+type (
+
+	// Sensor represents an input YAML file.
+	Sensor struct {
+		FullnameOverride string `json:"fullnameOverride"`
+		Configmap        struct {
+			Data sensorConfigmapData `json:"data"`
+		} `json:"configmap"`
+		Secret struct {
+			Data sensorSecretData `json:"data"`
+		} `json:"secret"`
+	}
+
+	sensorConfigmapData struct {
+		StadiumDeviceEndpoint   *string `json:"STADIUM_DEVICE_ENDPOINT,omitempty"`
+		StadiumDeviceSensorUUID string  `yaml:"STADIUM_DEVICE_SENSOR_UUID" json:"-"`
+		StadiumDeviceType       string  `json:"STADIUM_DEVICE_TYPE,omitempty"`
+	}
+
+	sensorSecretData struct {
+		StadiumDeviceAPIToken  *string `json:"STADIUM_DEVICE_API_TOKEN,omitempty"`
+		StadiumDeviceUsername  *string `json:"STADIUM_DEVICE_USERNAME,omitempty"`
+		StadiumDevicePassword  *string `json:"STADIUM_DEVICE_PASSWORD,omitempty"`
+		StadiumDeviceAPIKey    *string `json:"STADIUM_DEVICE_API_KEY,omitempty"`
+		StadiumDeviceAccountID *string `json:"STADIUM_DEVICE_ACCOUNT_ID,omitempty"`
+		StadiumDeviceID        *string `json:"STADIUM_DEVICE_ID,omitempty"`
 	}
 )
 
-type secret struct {
-	Name    string `json:"name"`
-	KVPairs string `json:"kvpairs"`
-}
+type (
+
+	// Output represents the output YAML file.
+	Output struct {
+		Secrets []outputSecret `json:"secrets"`
+	}
+
+	outputSecret struct {
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		KVPairs string `json:"kvpairs"`
+	}
+)
 
 func main() {
 	flag.Parse()
+	ctx := context.Background()
 
-	enabledSensors, err := getEnabledSensors(context.Background())
+	// Get enabled sensor UUIDs.
+	enabledSensorUUIDs, err := getEnabledSensors(ctx)
 	if err != nil {
-		slog.Error("Cannot get enabled sensors", "err", err.Error())
+		slog.Error("Cannot get enabled sensor UUIDs", "err", err.Error())
 		return
 	}
 
-	var output struct {
-		Secrets []secret `json:"secrets"`
-	}
+	var output Output
 
-	for _, path := range flag.Args() {
-		log := slog.With("file", path)
+	// Process each file.
+	for _, filePath := range flag.Args() {
+		log := slog.With("file", filePath)
 
-		file, err := os.Open(path)
+		// Open the file.
+		file, err := os.Open(filePath)
 		if err != nil {
 			log.Error("Cannot open file", "err", err.Error())
 			return
 		}
 
-		targetYAML, err := io.ReadAll(file)
+		// Read the file.
+		sensorYAML, err := io.ReadAll(file)
 		if err != nil {
 			log.Error("Cannot read file", "err", err.Error())
 			return
 		}
 
-		var target map[string]any
-		if err := yaml.Unmarshal(targetYAML, &target); err != nil {
+		// YAML decode the file.
+		var sensor Sensor
+		if err := yaml.Unmarshal(sensorYAML, &sensor); err != nil {
 			log.Error("Cannot YAML decode file", "err", err.Error())
 			return
 		}
 
-		fullnameOverride, ok := target["fullnameOverride"].(string)
-		if !ok {
+		// Check if the sensor is enabled.
+		if !slices.Contains(enabledSensorUUIDs, sensor.Configmap.Data.StadiumDeviceSensorUUID) {
 			continue
 		}
 
-		var sensorUUID string
-		kvpairs := map[string]any{}
+		// JSON encode the sensor's data objects.
+		kvpairsJSON, err := json.Marshal(struct {
+			sensorConfigmapData
+			sensorSecretData
+		}{sensor.Configmap.Data, sensor.Secret.Data})
 
-		for k, v := range target {
-			if k != "configmap" && k != "secret" {
-				continue
-			}
-
-			var data map[string]any
-			if m, _ := v.(map[string]any); m != nil {
-				if data, _ = m["data"].(map[string]any); data == nil {
-					continue
-				}
-			}
-
-			if uuid, ok := data["STADIUM_DEVICE_SENSOR_UUID"].(string); ok {
-				if slices.Contains(enabledSensors, uuid) {
-					sensorUUID = uuid
-				}
-			}
-
-			for dataKey, dataVal := range data {
-				if slices.Contains(dataKeys, dataKey) {
-					kvpairs[dataKey] = dataVal
-				}
-			}
-		}
-
-		if sensorUUID == "" {
-			continue
-		}
-
-		kvpairsJSON, err := json.Marshal(kvpairs)
 		if err != nil {
 			log.Error("Cannot JSON encode kvpairs", "err", err.Error())
 			return
 		}
 
-		output.Secrets = append(output.Secrets, secret{
-			Name:    fullnameOverride,
+		// Add a new secret to output.
+		output.Secrets = append(output.Secrets, outputSecret{
+			Name:    sensor.FullnameOverride,
+			Type:    sensor.Configmap.Data.StadiumDeviceType,
 			KVPairs: string(kvpairsJSON),
 		})
 	}
 
+	// YAML encode output into stdout.
 	if err := yaml.NewEncoder(os.Stdout, yaml.UseSingleQuote(*singleQuote)).Encode(output); err != nil {
 		slog.Error("Cannot YAML encode output", "err", err.Error())
 	}
 }
 
+// getEnabledSensors returns the UUIDs of all enabled sensors from the database.
 func getEnabledSensors(ctx context.Context) ([]string, error) {
 
-	conn, err := pgx.Connect(ctx, os.Getenv("SECRET_TUNNEL_POSTGRES_URL"))
+	// Create connection to the database.
+	conn, err := pgx.Connect(ctx, postgresURL)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create postgres connection")
 	}
+	defer conn.Close(ctx)
 
-	sensors, err := conn.Query(ctx, `
+	// Get UUIDs of all enabled rows.
+	rows, err := conn.Query(ctx, `
 		SELECT sensor_uuid
 		FROM collections.sensors
 		WHERE enabled_flag = true
@@ -139,20 +151,21 @@ func getEnabledSensors(ctx context.Context) ([]string, error) {
 		return nil, errors.Wrap(err, "cannot select enabled sensors")
 	}
 
-	defer sensors.Close()
+	defer rows.Close()
 
-	sensorUUIDs := []string{}
-	for sensors.Next() {
-		var sensor string
-		if err := sensors.Scan(&sensor); err != nil {
+	// Add each row's UUID to a slice.
+	uuids := []string{}
+	for rows.Next() {
+		var uuid string
+		if err := rows.Scan(&uuid); err != nil {
 			return nil, errors.Wrap(err, "cannot scan sensor")
 		}
-		sensorUUIDs = append(sensorUUIDs, sensor)
+		uuids = append(uuids, uuid)
 	}
 
-	if sensors.Err() != nil {
+	if rows.Err() != nil {
 		return nil, errors.Wrap(err, "cannot scan sensors")
 	}
 
-	return sensorUUIDs, nil
+	return uuids, nil
 }
