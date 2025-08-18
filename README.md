@@ -6,7 +6,15 @@
 go build -o secret-tunnel main.go
 
 # Run
-find ./src -name "*.yaml" | xargs ./secret-tunnel > out.yaml
+export SECRET_TUNNEL_POSTGRES_URL="..."
+find ./src -name '*.yaml' | xargs ./secret-tunnel > out.yaml
+
+# Run with Docker
+docker build -t secret-tunnel ./Docker
+docker run \
+    -e SECRET_TUNNEL_POSTGRES_URL="..." \
+    -v ./local-src:/secret-tunnel/src \
+    secret-tunnel > out.yaml
 ```
 
 ## Usage
