@@ -4,19 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"slices"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/goccy/go-yaml"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 )
 
 var (
-	postgresURL = os.Getenv("SECRET_TUNNEL_POSTGRES_URL")
-	singleQuote = flag.Bool("single-quote", false, "Single or double quotes for strings.")
+	singleQuote = flag.Bool("single-quote", false, "Use single/double quotes the output.")
+
+	awsRegion                   = os.Getenv("SELECT_TUNNEL_AWS_REGION")
+	awsPostgresPasswordSecretID = os.Getenv("SELECT_TUNNEL_AWS_SECRET_POSTGRES_PASSWORD")
+
+	pgUsername = os.Getenv("SECRET_TUNNEL_POSTGRES_USERNAME")
+	pgHost     = os.Getenv("SECRET_TUNNEL_POSTGRES_HOST")
+	pgPort     = os.Getenv("SECRET_TUNNEL_POSTGRES_PORT")
+	pgDatabase = os.Getenv("SECRET_TUNNEL_POSTGRES_DATABASE")
 )
 
 type (
@@ -66,8 +77,14 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
+	postgresPassword, err := getAWSSecrets(ctx)
+	if err != nil {
+		slog.Error("Cannot get AWS secrets", "err", err.Error())
+		return
+	}
+
 	// Get enabled sensor UUIDs.
-	enabledSensorUUIDs, err := getEnabledSensors(ctx)
+	enabledSensorUUIDs, err := getEnabledSensors(ctx, postgresPassword)
 	if err != nil {
 		slog.Error("Cannot get enabled sensor UUIDs", "err", err.Error())
 		return
@@ -131,10 +148,11 @@ func main() {
 }
 
 // getEnabledSensors returns the UUIDs of all enabled sensors from the database.
-func getEnabledSensors(ctx context.Context) ([]string, error) {
+func getEnabledSensors(ctx context.Context, postgresPassword string) ([]string, error) {
+	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s", pgUsername, postgresPassword, pgHost, pgPort, pgDatabase)
 
 	// Create connection to the database.
-	conn, err := pgx.Connect(ctx, postgresURL)
+	conn, err := pgx.Connect(ctx, pgURL)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create postgres connection")
 	}
@@ -168,4 +186,24 @@ func getEnabledSensors(ctx context.Context) ([]string, error) {
 	}
 
 	return uuids, nil
+}
+
+func getAWSSecrets(ctx context.Context) (postgresPassword string, err error) {
+
+	// Load AWS configuration.
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(awsRegion))
+	if err != nil {
+		slog.Error("Cannot load AWS config", "err", err.Error())
+		return
+	}
+
+	secrets := secretsmanager.NewFromConfig(cfg)
+
+	// Get the postgres password.
+	postgresPasswordResult, err := secrets.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: aws.String(awsPostgresPasswordSecretID)})
+	if err != nil {
+		return "", errors.Wrap(err, "cannot get postgres password from AWS")
+	}
+
+	return *postgresPasswordResult.SecretString, nil
 }
