@@ -36,7 +36,7 @@ docker run \
 * SECRET_TUNNEL_POSTGRES_DATABSE
 * SELECT_TUNNEL_AWS_REGION
 * SELECT_TUNNEL_AWS_SECRET_POSTGRES_PASSWORD
-  > The AWS secret-id of the postgres password.
+  > Your AWS secret-id of the postgres password.
 
 ### Flags
 * -single-quote
