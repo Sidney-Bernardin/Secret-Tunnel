@@ -15,7 +15,7 @@ find ./src -name '*.yaml' | xargs ./secret-tunnel > out.yaml
 ```
 
 ### Environment Variables
-* ST_AWS_REGION
+* ST_AWS_BASE_ENDPOINT
 * ST_AWS_DATABASE_SECRET_NAME
 
 ### Flags
