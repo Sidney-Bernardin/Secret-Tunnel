@@ -70,12 +70,13 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
-	// Load AWS config and create a Secrets-Manager client.
+	// Load AWS config.
 	awsConfig, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		slog.Error("cannot load AWS config", "err", err.Error())
 	}
 
+	// Create the AWS Secrets-Manager client.
 	secretsManagerClient = secretsmanager.NewFromConfig(awsConfig,
 		func(o *secretsmanager.Options) {
 			if awsBaseEndpoint != "" {
